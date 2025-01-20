@@ -1,0 +1,377 @@
+Index: share/man/man4/acpi.4
+===================================================================
+RCS file: /OpenBSD/src/share/man/man4/acpi.4,v
+retrieving revision 1.75
+diff -u -p -r1.75 acpi.4
+--- share/man/man4/acpi.4	4 Aug 2024 16:31:02 -0000	1.75
++++ share/man/man4/acpi.4	7 Oct 2024 19:31:17 -0000
+@@ -130,6 +130,8 @@ Intel OnChip System Fabric device
+ Intelligent Platform Management Interface driver
+ .It Xr pchgpio 4
+ Intel PCH GPIO controller
++.It Xr pckbc 4
++Keyboard controller
+ .It Xr pluart 4
+ ARM PrimeCell PL011 UART
+ .It Xr qcgpio 4
+Index: share/man/man4/pckbc.4
+===================================================================
+RCS file: /OpenBSD/src/share/man/man4/pckbc.4,v
+retrieving revision 1.18
+diff -u -p -r1.18 pckbc.4
+--- share/man/man4/pckbc.4	26 Sep 2010 20:39:08 -0000	1.18
++++ share/man/man4/pckbc.4	7 Oct 2024 19:31:17 -0000
+@@ -33,6 +33,7 @@
+ .Nd PC (ISA) keyboard controller driver
+ .Sh SYNOPSIS
+ .Cd "pckbc* at isa? flags 0x00           " Pq "alpha, amd64, i386, loongson"
++.Cd "pckbc* at acpi?                     " Pq "amd64"
+ .Cd "pckbc* at ebus?                     " Pq "sparc64"
+ .Cd "pckbd* at pckbc?"
+ .Cd "pms*   at pckbc?"
+@@ -40,19 +41,13 @@
+ The
+ .Nm
+ driver handles resource allocation and device attachment for the
+-traditional PC/AT keyboard controller.
+-It provides two logical connections for child devices, the
++traditional PC/AT keyboard controller, or emulations thereof.
++It provides up to two logical connections for child devices, the
+ .Dq keyboard
+ slot for a keyboard and the
+ .Dq auxiliary
+-slot for mice (the latter might be missing in older keyboard controllers).
+-.\" .Pp
+-.\" The optional
+-.\" .Dq slot
+-.\" locator argument can be used to force unusual connections of devices to
+-.\" logical slots.
+-.\" This feature is for experimentation only, it will not be
+-.\" useful in normal operation.
++slot for mice (the latter might be missing in older keyboard controllers,
++or recent emulations).
+ .Pp
+ To avoid attaching a phantom PS/2 keyboard device, the
+ .Nm
+@@ -63,6 +58,7 @@ PS/2 keyboard.
+ The keyboard can be forced to attach on these systems, by changing the
+ device flags to 1.
+ .Sh SEE ALSO
++.Xr acpi 4 ,
+ .Xr ebus 4 ,
+ .Xr intro 4 ,
+ .Xr isa 4 ,
+Index: sys/arch/amd64/conf/GENERIC
+===================================================================
+RCS file: /OpenBSD/src/sys/arch/amd64/conf/GENERIC,v
+retrieving revision 1.526
+diff -u -p -r1.526 GENERIC
+--- sys/arch/amd64/conf/GENERIC	4 Sep 2024 07:45:08 -0000	1.526
++++ sys/arch/amd64/conf/GENERIC	7 Oct 2024 19:31:17 -0000
+@@ -86,6 +86,7 @@ ipmi0		at acpi? disable
+ ccpmic*		at iic?
+ tipmic*		at iic?
+ intelpmc*	at acpi?
++pckbc*		at acpi?
+ 
+ efi0		at bios0
+ mpbios0		at bios0
+Index: sys/arch/amd64/conf/RAMDISK
+===================================================================
+RCS file: /OpenBSD/src/sys/arch/amd64/conf/RAMDISK,v
+retrieving revision 1.87
+diff -u -p -r1.87 RAMDISK
+--- sys/arch/amd64/conf/RAMDISK	12 Aug 2024 18:43:41 -0000	1.87
++++ sys/arch/amd64/conf/RAMDISK	7 Oct 2024 19:31:17 -0000
+@@ -37,6 +37,7 @@ acpimadt0	at acpi?
+ com0		at acpi? addr 0x3f8
+ com1		at acpi? addr 0x2f8
+ com*		at acpi?
++pckbc*		at acpi?
+ 
+ mpbios0		at bios0
+ 
+Index: sys/arch/amd64/conf/RAMDISK_CD
+===================================================================
+RCS file: /OpenBSD/src/sys/arch/amd64/conf/RAMDISK_CD,v
+retrieving revision 1.207
+diff -u -p -r1.207 RAMDISK_CD
+--- sys/arch/amd64/conf/RAMDISK_CD	14 Aug 2024 14:40:45 -0000	1.207
++++ sys/arch/amd64/conf/RAMDISK_CD	7 Oct 2024 19:31:17 -0000
+@@ -56,6 +56,7 @@ com1		at acpi? addr 0x2f8
+ com2		at acpi? addr 0x3e8
+ com*		at acpi?
+ glkgpio*	at acpi?
++pckbc*		at acpi?
+ 
+ mpbios0		at bios0
+ 
+Index: sys/dev/acpi/acpi.c
+===================================================================
+RCS file: /OpenBSD/src/sys/dev/acpi/acpi.c,v
+retrieving revision 1.439
+diff -u -p -r1.439 acpi.c
+--- sys/dev/acpi/acpi.c	4 Sep 2024 21:39:18 -0000	1.439
++++ sys/dev/acpi/acpi.c	7 Oct 2024 19:31:17 -0000
+@@ -3036,7 +3036,6 @@ const char *acpi_skip_hids[] = {
+ 
+ /* ISA devices for which we attach a driver later */
+ const char *acpi_isa_hids[] = {
+-	"PNP0303",	/* IBM Enhanced Keyboard (101/102-key, PS/2 Mouse) */
+ 	"PNP0400",	/* Standard LPT Parallel Port */
+ 	"PNP0401",	/* ECP Parallel Port */
+ 	"PNP0700",	/* PC-class Floppy Disk Controller */
+Index: sys/dev/acpi/files.acpi
+===================================================================
+RCS file: /OpenBSD/src/sys/dev/acpi/files.acpi,v
+retrieving revision 1.71
+diff -u -p -r1.71 files.acpi
+--- sys/dev/acpi/files.acpi	4 Aug 2024 11:05:18 -0000	1.71
++++ sys/dev/acpi/files.acpi	7 Oct 2024 19:31:17 -0000
+@@ -289,3 +289,7 @@ file	dev/acpi/iosf_acpi.c		iosf_acpi
+ device	intelpmc
+ attach	intelpmc at acpi
+ file	dev/acpi/intelpmc.c		intelpmc
++
++# PS/2 Keyboard Controller
++attach	pckbc at acpi with pckbc_acpi
++file	dev/acpi/pckbc_acpi.c		pckbc_acpi
+Index: sys/dev/acpi/pckbc_acpi.c
+===================================================================
+RCS file: sys/dev/acpi/pckbc_acpi.c
+diff -N sys/dev/acpi/pckbc_acpi.c
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ sys/dev/acpi/pckbc_acpi.c	7 Oct 2024 19:31:17 -0000
+@@ -0,0 +1,189 @@
++/*	$OpenBSD$	*/
++/*
++ * Copyright (c) 2024, Miodrag Vallat.
++ *
++ * Permission to use, copy, modify, and distribute this software for any
++ * purpose with or without fee is hereby granted, provided that the above
++ * copyright notice and this permission notice appear in all copies.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
++ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
++ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
++ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
++ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
++ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
++ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
++ */
++/*
++ * Copyright (c) 1998
++ *	Matthias Drochner.  All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/device.h>
++#include <sys/malloc.h>
++
++#include <machine/bus.h>
++
++#include <dev/acpi/acpivar.h>
++
++#include <dev/ic/i8042reg.h>
++#include <dev/ic/pckbcvar.h>
++
++int	pckbc_acpi_match(struct device *, void *, void *);
++void	pckbc_acpi_attach(struct device *, struct device *, void *);
++int	pckbc_acpi_activate(struct device *, int);
++
++struct pckbc_acpi_softc {
++	struct pckbc_softc sc;
++	void *sc_ih;
++};
++
++const struct cfattach pckbc_acpi_ca = {
++	.ca_devsize = sizeof(struct pckbc_acpi_softc),
++	.ca_match = pckbc_acpi_match,
++	.ca_attach = pckbc_acpi_attach,
++	.ca_activate = pckbc_acpi_activate
++};
++
++const char *pckbc_hids[] = {
++	"GOOG000A",	/* Chromebook built-in keyboard */
++	"MSFT0001",	/* Built-in keyboard found on various systems */
++	"1025167A", 
++	NULL
++};
++
++int
++pckbc_acpi_match(struct device *parent, void *match, void *aux)
++{
++	struct acpi_attach_args *aaa = aux;
++	struct cfdata *cf = match;
++
++	if (aaa->aaa_naddr < 2)
++		return 0;
++	return acpi_matchhids(aaa, pckbc_hids, cf->cf_driver->cd_name);
++}
++
++int
++pckbc_acpi_activate(struct device *self, int act)
++{
++	struct pckbc_acpi_softc *pasc = (struct pckbc_acpi_softc *)self;
++	struct pckbc_softc *sc = &pasc->sc;
++	int rv = 0;
++
++	switch (act) {
++	case DVACT_SUSPEND:
++		rv = config_activate_children(self, act);
++		pckbc_stop(sc);
++		break;
++	case DVACT_RESUME:
++		pckbc_reset(sc);
++		rv = config_activate_children(self, act);
++		break;
++	default:
++		rv = config_activate_children(self, act);
++		break;
++	}
++	return rv;
++}
++
++void
++pckbc_acpi_attach(struct device *parent, struct device *self, void *aux)
++{
++	struct pckbc_acpi_softc *pasc = (struct pckbc_acpi_softc *)self;
++	struct pckbc_softc *sc = &pasc->sc;
++	struct acpi_attach_args *aaa = aux;
++	struct pckbc_internal *t;
++	bus_space_handle_t ioh_d, ioh_c;
++	int rv;
++
++	if (aaa->aaa_nirq < 1) {
++		printf(": no interrupt\n");
++		return;
++	}
++
++	printf(" addr 0x%llx/0x%llx 0x%llx/0x%llx", aaa->aaa_addr[0],
++	    aaa->aaa_size[0], aaa->aaa_addr[1], aaa->aaa_size[1]);
++	printf(" irq %d", aaa->aaa_irq[0]);
++	printf(": \"%s\"", aaa->aaa_dev);
++
++	pasc->sc_ih = acpi_intr_establish(aaa->aaa_irq[0],
++	    aaa->aaa_irq_flags[0], IPL_TTY, pckbcintr, sc, sc->sc_dv.dv_xname);
++	if (pasc->sc_ih == NULL) {
++		printf(": can't establish interrupt\n");
++		return;
++	}
++
++	if (pckbc_is_console(aaa->aaa_bst[0], aaa->aaa_addr[0])) {
++		t = &pckbc_consdata;
++		pckbc_console_attached = 1;
++		/* t->t_cmdbyte was initialized by cnattach */
++	} else {
++		if ((rv = bus_space_map(aaa->aaa_bst[0], aaa->aaa_addr[0], 1, 0,
++		    &ioh_d)) != 0) {
++			printf(": couldn't map data port (%d)\n", rv);
++			goto fail_mapd;
++		}
++		if ((rv = bus_space_map(aaa->aaa_bst[1], aaa->aaa_addr[1], 1, 0,
++		    &ioh_c)) != 0) {
++			printf(": couldn't map command port (%d)\n", rv);
++			goto fail_mapc;
++		}
++
++		t = malloc(sizeof(*t), M_DEVBUF, M_WAITOK | M_ZERO);
++		/*
++		 * pckbc should theoretically be updated to use separate
++		 * bus_space_tag_t for the data and command ports, since on
++		 * this particular attachment they appear as separate I/O
++		 * resources. But since these are I/O resources, all
++		 * aaa_bst[] are identical, so we can avoid this change
++		 * for the time being as long as the logic in
++		 * acpi_parse_resources() does not change.
++		 */
++		t->t_iot = aaa->aaa_bst[0];
++		t->t_ioh_d = ioh_d;
++		t->t_ioh_c = ioh_c;
++		t->t_cmdbyte = KC8_CPU; /* Enable ports */
++	}
++
++	t->t_sc = sc;
++	sc->id = t;
++
++	printf("\n");
++
++	/*
++	 * Make sure pckbc@isa will not try to attach.
++	 */
++	{
++		extern int pckbc_acpi;
++		pckbc_acpi = 1;
++	}
++
++	pckbc_attach(sc, 0);
++	return;
++
++ fail_mapc:
++	bus_space_unmap(aaa->aaa_bst[0], ioh_d, 1);
++ fail_mapd:
++	acpi_intr_disestablish(pasc->sc_ih);
++}
+Index: sys/dev/ic/pckbc.c
+===================================================================
+RCS file: /OpenBSD/src/sys/dev/ic/pckbc.c,v
+retrieving revision 1.55
+diff -u -p -r1.55 pckbc.c
+--- sys/dev/ic/pckbc.c	26 Aug 2023 15:01:00 -0000	1.55
++++ sys/dev/ic/pckbc.c	7 Oct 2024 19:31:17 -0000
+@@ -89,6 +89,10 @@ int pckbc_console_attached;
+ int pckbc_console;
+ static struct pckbc_slotdata pckbc_cons_slotdata;
+ 
++#ifdef __HAVE_ACPI
++int pckbc_acpi;
++#endif
++
+ static int pckbc_wait_output(bus_space_tag_t, bus_space_handle_t);
+ 
+ static int pckbc_get8042cmd(struct pckbc_internal *);
+Index: sys/dev/isa/pckbc_isa.c
+===================================================================
+RCS file: /OpenBSD/src/sys/dev/isa/pckbc_isa.c,v
+retrieving revision 1.19
+diff -u -p -r1.19 pckbc_isa.c
+--- sys/dev/isa/pckbc_isa.c	18 Aug 2015 06:54:00 -0000	1.19
++++ sys/dev/isa/pckbc_isa.c	7 Oct 2024 19:31:17 -0000
+@@ -56,6 +56,15 @@ pckbc_isa_match(struct device *parent, v
+ 	bus_space_handle_t ioh_d, ioh_c;
+ 	int res;
+ 
++#ifdef __HAVE_ACPI
++	/* Don't try anything if pckbc@acpi has claimed the keyboard. */
++	{
++		extern int pckbc_acpi;
++		if (pckbc_acpi)
++			return 0;
++	}
++#endif
++
+ 	/* If values are hardwired to something that they can't be, punt. */
+ 	if ((ia->ia_iobase != IOBASEUNK && ia->ia_iobase != IO_KBD) ||
+ 	    ia->ia_maddr != MADDRUNK ||
+
